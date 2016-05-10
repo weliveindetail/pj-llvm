@@ -762,7 +762,7 @@ uint8_t *RuntimeDyldImpl::createStubFunction(uint8_t *Addr,
   } else if (Arch == Triple::x86_64) {
     *Addr      = 0xFF; // jmp
     *(Addr+1)  = 0x25; // rip
-    // 32-bit PC-relative address of the GOT entry will be stored at Addr+2
+    writeInt32BE(Addr+2, 0); // zero-initialize PC-relative address of the target address
   } else if (Arch == Triple::x86) {
     *Addr      = 0xE9; // 32-bit pc-relative jump.
   }
