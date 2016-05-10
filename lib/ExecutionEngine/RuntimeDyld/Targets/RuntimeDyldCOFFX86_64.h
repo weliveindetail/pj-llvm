@@ -106,52 +106,36 @@ public:
     }
   }
 
-  std::tuple<uint64_t, uint64_t, uint64_t> 
-  generateRelocationStub(unsigned SectionID, StringRef TargetName,
-                         uint64_t Offset, uint64_t RelType, 
-                         uint64_t Addend, StubMap &Stubs) {
-    uintptr_t StubOffset;
-    SectionEntry &Section = Sections[SectionID];
+  uint64_t generateRelocationStub(unsigned SectionID, StringRef TargetName,
+                                  uint64_t Offset, uint64_t RelType, 
+                                  uint64_t Addend, StubMap &Stubs) {
+    RelocationValueRef OriginalRelValueRef;
+    OriginalRelValueRef.SectionID = SectionID;
+    OriginalRelValueRef.Offset = Offset;
+    OriginalRelValueRef.Addend = Addend;
+    OriginalRelValueRef.SymbolName = TargetName.data();
 
-    {
-      RelocationValueRef OriginalRelValueRef;
-      OriginalRelValueRef.SectionID = SectionID;
-      OriginalRelValueRef.Offset = Offset;
-      OriginalRelValueRef.Addend = Addend;
-      OriginalRelValueRef.SymbolName = TargetName.data();
+    StubMap::const_iterator i = Stubs.find(OriginalRelValueRef);
 
-      StubMap::const_iterator i = Stubs.find(OriginalRelValueRef);
+    if (i == Stubs.end()) {
+      DEBUG(dbgs() << " Create a new stub function for " 
+                      << TargetName.data() << "\n");
 
-      if (i == Stubs.end()) {
-        DEBUG(dbgs() << " Create a new stub function for " 
-                     << TargetName.data() << "\n");
+      SectionEntry &Section = Sections[SectionID];
+      uintptr_t StubOffset = Section.getStubOffset();
 
-        StubOffset = Section.getStubOffset();
-        Stubs[OriginalRelValueRef] = StubOffset;
+      createStubFunction(Section.getAddressWithOffset(StubOffset));
+      Section.advanceStubOffset(getMaxStubSize());
 
-        createStubFunction(Section.getAddressWithOffset(StubOffset));
-        Section.advanceStubOffset(getMaxStubSize());
-      }
-      else {
-        DEBUG(dbgs() << " Stub function found for " 
-                    << TargetName.data() << "\n");
-
-        StubOffset = i->second;
-      }
+      Stubs[OriginalRelValueRef] = StubOffset;
+      return StubOffset;
     }
+    else {
+      DEBUG(dbgs() << " Stub function found for " 
+                   << TargetName.data() << "\n");
 
-    // resolve original relocation to stub function
-    RelocationEntry RE(SectionID, Offset, RelType, Addend);
-    uint8_t *StubAbsAddress = Section.getAddressWithOffset(StubOffset);
-
-    resolveRelocation(RE, reinterpret_cast<uint64_t>(StubAbsAddress));
-
-    // adjust relocation info so resolution writes to the stub function
-    Addend = 0;
-    Offset = StubOffset + 6;
-    RelType = COFF::IMAGE_REL_AMD64_ADDR64;
-
-    return std::make_tuple(Offset, RelType, Addend);
+      return i->second;
+    }
   }
 
   relocation_iterator processRelocationRef(unsigned SectionID,
@@ -192,8 +176,22 @@ public:
       Addend = readBytesUnaligned(Displacement, 4);
 
       if (IsExtern)
-        std::tie(Offset, RelType, Addend) = generateRelocationStub(
+      {
+        uint64_t StubOffset = generateRelocationStub(
           SectionID, TargetName, Offset, RelType, Addend, Stubs);
+
+        // Make the target call a call into the stub table.
+        RelocationEntry RE(SectionID, Offset, RelType, Addend);
+        uint8_t *StubAbsAddress = Section.getAddressWithOffset(StubOffset);
+        resolveRelocation(RE, reinterpret_cast<uint64_t>(StubAbsAddress));
+
+        // Let relocation resolution write the symbol pointer 
+        // to the stub function as 64bit absolute address.
+        constexpr unsigned PointerOffsetInStub = 6;
+        Offset = StubOffset + PointerOffsetInStub;
+        RelType = COFF::IMAGE_REL_AMD64_ADDR64;
+        Addend = 0;
+      }
 
       break;
     }
