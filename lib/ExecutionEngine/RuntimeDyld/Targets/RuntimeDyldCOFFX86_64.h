@@ -37,7 +37,7 @@ public:
     : RuntimeDyldCOFF(MM, Resolver) {}
 
   unsigned getMaxStubSize() override {
-    return 6; // 2-byte jmp instruction + 32-bit relative address
+    return 14; // 2-byte jmp instruction + 32-bit relative address
   }
 
   // The target location for the relocation is described by RE.SectionID and
@@ -106,21 +106,50 @@ public:
     }
   }
 
+  uint64_t generateRelocationStub(unsigned SectionID, StringRef TargetName,
+                                  uint64_t Offset, uint64_t RelType, 
+                                  uint64_t Addend, StubMap &Stubs) {
+    RelocationValueRef OriginalRelValueRef;
+    OriginalRelValueRef.SectionID = SectionID;
+    OriginalRelValueRef.Offset = Offset;
+    OriginalRelValueRef.Addend = Addend;
+    OriginalRelValueRef.SymbolName = TargetName.data();
+
+    StubMap::const_iterator i = Stubs.find(OriginalRelValueRef);
+
+    if (i == Stubs.end()) {
+      DEBUG(dbgs() << " Create a new stub function for " 
+                      << TargetName.data() << "\n");
+
+      SectionEntry &Section = Sections[SectionID];
+      uintptr_t StubOffset = Section.getStubOffset();
+
+      createStubFunction(Section.getAddressWithOffset(StubOffset));
+      Section.advanceStubOffset(getMaxStubSize());
+
+      Stubs[OriginalRelValueRef] = StubOffset;
+      return StubOffset;
+    }
+    else {
+      DEBUG(dbgs() << " Stub function found for " 
+                   << TargetName.data() << "\n");
+
+      return i->second;
+    }
+  }
+
   Expected<relocation_iterator>
-  processRelocationRef(unsigned SectionID,
-                       relocation_iterator RelI,
-                       const ObjectFile &Obj,
-                       ObjSectionToIDMap &ObjSectionToID,
-                       StubMap &Stubs) override {
+  relocation_iterator processRelocationRef(unsigned SectionID,
+                                           relocation_iterator RelI,
+                                           const ObjectFile &Obj,
+                                           ObjSectionToIDMap &ObjSectionToID,
+                                           StubMap &Stubs) override {
     // If possible, find the symbol referred to in the relocation,
     // and the section that contains it.
     symbol_iterator Symbol = RelI->getSymbol();
     if (Symbol == Obj.symbol_end())
       report_fatal_error("Unknown symbol in relocation");
-    auto SectionOrError = Symbol->getSection();
-    if (!SectionOrError)
-      return SectionOrError.takeError();
-    section_iterator SecI = *SectionOrError;
+    section_iterator SecI = *Symbol->getSection();
     // If there is no section, this must be an external reference.
     const bool IsExtern = SecI == Obj.section_end();
 
@@ -131,6 +160,11 @@ public:
     SectionEntry &Section = Sections[SectionID];
     uintptr_t ObjTarget = Section.getObjAddress() + Offset;
 
+    ErrorOr<StringRef> TargetNameOrErr = Symbol->getName();
+    if (std::error_code EC = TargetNameOrErr.getError())
+      report_fatal_error(EC.message());
+    StringRef TargetName = *TargetNameOrErr;
+
     switch (RelType) {
 
     case COFF::IMAGE_REL_AMD64_REL32:
@@ -138,7 +172,31 @@ public:
     case COFF::IMAGE_REL_AMD64_REL32_2:
     case COFF::IMAGE_REL_AMD64_REL32_3:
     case COFF::IMAGE_REL_AMD64_REL32_4:
-    case COFF::IMAGE_REL_AMD64_REL32_5:
+    case COFF::IMAGE_REL_AMD64_REL32_5: {
+      uint8_t *Displacement = (uint8_t *)ObjTarget;
+      Addend = readBytesUnaligned(Displacement, 4);
+
+      if (IsExtern)
+      {
+        uint64_t StubOffset = generateRelocationStub(
+          SectionID, TargetName, Offset, RelType, Addend, Stubs);
+
+        // Make the target call a call into the stub table.
+        RelocationEntry RE(SectionID, Offset, RelType, Addend);
+        uint8_t *StubAbsAddress = Section.getAddressWithOffset(StubOffset);
+        resolveRelocation(RE, reinterpret_cast<uint64_t>(StubAbsAddress));
+
+        // Let relocation resolution write the symbol pointer 
+        // to the stub function as 64bit absolute address.
+        constexpr unsigned PointerOffsetInStub = 6;
+        Offset = StubOffset + PointerOffsetInStub;
+        RelType = COFF::IMAGE_REL_AMD64_ADDR64;
+        Addend = 0;
+      }
+
+      break;
+    }
+
     case COFF::IMAGE_REL_AMD64_ADDR32NB: {
       uint8_t *Displacement = (uint8_t *)ObjTarget;
       Addend = readBytesUnaligned(Displacement, 4);
