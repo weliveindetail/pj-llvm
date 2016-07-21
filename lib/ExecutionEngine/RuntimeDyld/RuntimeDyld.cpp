@@ -941,7 +941,9 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
 
       if (!Addr)
       {
-        assert (false);
+//        assert (false);
+		errs() << "Cannot resolve: " << Name << "\n";
+		fflush(stderr);
         ExternalSymbolRelocations.erase(i);
         continue;
       }
