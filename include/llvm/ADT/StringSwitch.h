@@ -146,7 +146,7 @@ public:
     return *this;
   }
 
-  LLVM_ATTRIBUTE_ALWAYS_INLINE
+  // LLVM_ATTRIBUTE_ALWAYS_INLINE
   R Default(const T& Value) const {
     if (Result)
       return *Result;
