@@ -939,10 +939,12 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
                SymInfo.getOffset();
       }
 
-      // FIXME: Implement error handling that doesn't kill the host program!
       if (!Addr)
-        report_fatal_error("Program used external function '" + Name +
-                           "' which could not be resolved!");
+      {
+        assert (false);
+        ExternalSymbolRelocations.erase(i);
+        continue;
+      }
 
       // If Resolver returned UINT64_MAX, the client wants to handle this symbol
       // manually and we shouldn't resolve its relocations.
