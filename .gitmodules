@@ -1,0 +1,3 @@
+[submodule "Clang"]
+	path = tools/clang
+	url = https://github.com/weliveindetail/pj-clang.git
