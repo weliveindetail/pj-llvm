@@ -941,7 +941,7 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
 
       if (!Addr)
       {
-        assert (false);
+        // this will be reported in the diagnostics now
         ExternalSymbolRelocations.erase(i);
         continue;
       }
